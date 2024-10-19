@@ -13,7 +13,7 @@ A Blender add-on designed for exporting multiple animations and objects to separ
 
 ## How to Install
 
-1. **Download the ZIP file**: You can find the latest version of the add-on [here](https://github.com/yourusername/blender-batch-fbx-exporter/releases).
+1. **Download the ZIP file**:
 2. **Open Blender** and go to `Edit` > `Preferences`.
 3. In the Preferences window, select the `Add-ons` tab.
 4. Click `Install...` at the top-right of the window.
