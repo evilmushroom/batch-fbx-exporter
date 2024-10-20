@@ -1,4 +1,4 @@
-# Blender Batch FBX Exporter
+# Blender Batch FBX Exporter (for blender 3.6)
 
 A Blender add-on designed for exporting multiple animations and objects to separate FBX files with Unreal Engine-friendly settings. This tool streamlines the export process for characters, skeletal meshes, and their associated animations, allowing for batch exporting of assets.
 
