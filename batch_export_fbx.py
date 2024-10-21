@@ -7,7 +7,6 @@ bl_info = {
     "category": "Object",
     "location": "3D View > Sidebar > Tool Tab",
     "doc_url": "https://github.com/evilmushroom/batch-fbx-exporter"
-    "support": "COMMUNITY", 
 }
 
 
