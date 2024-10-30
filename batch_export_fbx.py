@@ -18,14 +18,36 @@ from bpy.types import PropertyGroup
 
 def export_fbx(filepath, use_selection, bake_anim=False, bake_anim_use_all_actions=False):
     """Common FBX export function with Unreal-friendly settings."""
-    # Store original unit settings
+    # Store original unit settings and time
     original_unit_system = bpy.context.scene.unit_settings.system
     original_scale_length = bpy.context.scene.unit_settings.scale_length
+    original_frame = bpy.context.scene.frame_current
+    
+    # Store original armature transforms
+    armature = bpy.context.scene.character_armature
+    original_location = None
+    original_rotation = None
+    original_scale = None
+    
+    if armature:
+        original_location = armature.location.copy()
+        original_rotation = armature.rotation_euler.copy()
+        original_scale = armature.scale.copy()
+        
+        # Reset armature transforms for mesh export
+        if not bake_anim:
+            armature.location = (0, 0, 0)
+            armature.rotation_euler = (0, 0, 0)
+            # Don't reset scale as it might be intentional
 
     try:
         # Set unit settings for export
         bpy.context.scene.unit_settings.system = 'METRIC'
-        bpy.context.scene.unit_settings.scale_length = 1  # Set to 1 for correct size
+        bpy.context.scene.unit_settings.scale_length = 1
+
+        # If exporting mesh (not animation), ensure we're at frame 0
+        if not bake_anim:
+            bpy.context.scene.frame_set(0)
 
         bpy.ops.export_scene.fbx(
             filepath=filepath,
@@ -56,14 +78,21 @@ def export_fbx(filepath, use_selection, bake_anim=False, bake_anim_use_all_actio
             batch_mode='OFF',
             use_batch_own_dir=False,
             use_metadata=True,
-            global_scale=1.0,  # Set this to 100.0 to match the import scale
+            global_scale=1.0,
             apply_unit_scale=True,
             apply_scale_options='FBX_SCALE_NONE'
         )
     finally:
-        # Restore original unit settings
+        # Restore original settings
         bpy.context.scene.unit_settings.system = original_unit_system
         bpy.context.scene.unit_settings.scale_length = original_scale_length
+        bpy.context.scene.frame_set(original_frame)
+        
+        # Restore armature transforms
+        if armature and original_location is not None:
+            armature.location = original_location
+            armature.rotation_euler = original_rotation
+            armature.scale = original_scale
 
 def export_action(obj, action, export_path):
     """Export the given action as an FBX file with scaled animation."""
