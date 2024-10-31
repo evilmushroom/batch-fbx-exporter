@@ -1,8 +1,8 @@
 bl_info = {
     "name": "Batch FBX Exporter",
-    "blender": (3, 6, 9),  # Ensure this is the correct Blender version
-    "version": (1, 0, 0),  # Versioning helps track updates
-    "author": "Evilmushroom",  # Replace with your actual name or username
+    "blender": (3, 6, 9),
+    "version": (1, 0, 0),
+    "author": "Evilmushroom",
     "description": "Batch export multiple animations and objects to separate FBX files with Unreal-friendly settings.",
     "category": "Object",
     "location": "3D View > Sidebar > Tool Tab",
@@ -252,22 +252,24 @@ class OBJECT_OT_batch_export_fbx(bpy.types.Operator):
             self.report({'ERROR'}, "No armature selected")
             return {'CANCELLED'}
 
-        # Store the original action and pose position to restore later
+        # Store the original state
         original_action = armature.animation_data.action if armature.animation_data else None
         original_pose_position = armature.data.pose_position
+        temp_action = None  # Initialize temp_action variable
 
         try:
-            # Set armature to rest position to avoid pose offsets
-            armature.data.pose_position = 'REST'
-
             # Export character (skeletal mesh only) in rest pose
             if context.scene.export_character:
+                # Set to REST position for mesh export
+                armature.data.pose_position = 'REST'
+                
                 character_objects = [obj.object for obj in context.scene.character_objects if obj.export]
                 if character_objects:
                     character_objects.append(armature)
-
-                    # Temporarily clear animation to export rest pose
+                    
+                    # Clear animation data temporarily
                     if armature.animation_data:
+                        temp_action = armature.animation_data.action
                         armature.animation_data.action = None
                     
                     bpy.ops.object.select_all(action='DESELECT')
@@ -277,32 +279,36 @@ class OBJECT_OT_batch_export_fbx(bpy.types.Operator):
                     
                     fbx_file = os.path.join(export_path, f"{context.scene.character_name}_Character.fbx")
                     export_fbx(fbx_file, use_selection=True, bake_anim=False)
+                    
+                    # Restore the animation data if it was cleared
+                    if armature.animation_data and temp_action:
+                        armature.animation_data.action = temp_action
+                    
                     self.report({'INFO'}, f"Exported character in rest pose: {fbx_file}")
-
-            # Restore the original action for animation export
-            if original_action:
-                armature.animation_data.action = original_action
 
             # Export animations
             if context.scene.export_animations:
+                # Set back to POSE position for animation export
+                armature.data.pose_position = 'POSE'
+                
                 if armature.animation_data:
                     actions = [action for action in bpy.data.actions if getattr(action, "export", True)]
 
                     if not actions:
                         self.report({'WARNING'}, "No actions selected for export")
                     else:
-                        # Store the current action to restore it later
-                        original_action = armature.animation_data.action
-
                         for action in actions:
                             bpy.ops.object.select_all(action='DESELECT')
                             armature.select_set(True)
                             context.view_layer.objects.active = armature
                             
-                            # Set the current action to the one we want to export
+                            # Ensure we're in the right pose mode
+                            armature.data.pose_position = 'POSE'
+                            
+                            # Set the current action
                             armature.animation_data.action = action
                             
-                            # Set the frame range to the action's frame range
+                            # Set the frame range
                             context.scene.frame_start = int(action.frame_range[0])
                             context.scene.frame_end = int(action.frame_range[1])
                             
@@ -314,18 +320,13 @@ class OBJECT_OT_batch_export_fbx(bpy.types.Operator):
                                 bake_anim_use_all_actions=False
                             )
                             self.report({'INFO'}, f"Exported animation: {fbx_file}")
-
-                        # Restore the original action after exporting all animations
-                        armature.animation_data.action = original_action
                 else:
                     self.report({'WARNING'}, "Selected armature has no animation data")
 
         finally:
-            # Restore original pose position (back to POSE mode)
+            # Restore original state
             armature.data.pose_position = original_pose_position
-
-            # Restore any original action if it was modified
-            if original_action:
+            if original_action and armature.animation_data:
                 armature.animation_data.action = original_action
 
         return {'FINISHED'}
