@@ -1,8 +1,8 @@
 bl_info = {
     "name": "Batch FBX Exporter",
-    "blender": (3, 6, 9),
-    "version": (1, 0, 0),
-    "author": "Evilmushroom",
+    "blender": (3, 6, 9),  # Ensure this is the correct Blender version
+    "version": (1, 0, 0),  # Versioning helps track updates
+    "author": "Evilmushroom",  # Replace with your actual name or username
     "description": "Batch export multiple animations and objects to separate FBX files with Unreal-friendly settings.",
     "category": "Object",
     "location": "3D View > Sidebar > Tool Tab",
@@ -13,7 +13,7 @@ bl_info = {
 import bpy
 import os
 import traceback
-from bpy.props import StringProperty, BoolProperty, PointerProperty, CollectionProperty
+from bpy.props import StringProperty, BoolProperty, PointerProperty, CollectionProperty, EnumProperty
 from bpy.types import PropertyGroup
 
 def export_fbx(filepath, use_selection, bake_anim=False, bake_anim_use_all_actions=False):
@@ -43,7 +43,7 @@ def export_fbx(filepath, use_selection, bake_anim=False, bake_anim_use_all_actio
     try:
         # Set unit settings for export
         bpy.context.scene.unit_settings.system = 'METRIC'
-        bpy.context.scene.unit_settings.scale_length = 1
+        #bpy.context.scene.unit_settings.scale_length = 1
 
         # If exporting mesh (not animation), ensure we're at frame 0
         if not bake_anim:
@@ -71,7 +71,7 @@ def export_fbx(filepath, use_selection, bake_anim=False, bake_anim_use_all_actio
             axis_up='Y',
             bake_space_transform=True,
             use_subsurf=False,
-            use_armature_deform_only=True,
+            use_armature_deform_only=bpy.context.scene.use_armature_deform_only,
             use_custom_props=True,
             path_mode='COPY',
             embed_textures=True,
@@ -111,7 +111,7 @@ def export_action(obj, action, export_path):
         bpy.context.scene.frame_end = int(action.frame_range[1])
 
         # Define a scale factor for the animation (100 for cm to m conversion)
-        animation_scale_factor = 100  # Adjust this value as needed
+        scale_factor = bpy.context.scene.unit_settings.scale_length * 100
 
         # Create a temporary action to store scaled keyframes
         temp_action = action.copy()
@@ -122,7 +122,7 @@ def export_action(obj, action, export_path):
             if fcurve.data_path.startswith('pose.bones'):
                 for keyframe in fcurve.keyframe_points:
                     print(f"Original Keyframe Value: {keyframe.co[1]}")  # Debugging statement
-                    keyframe.co[1] *= animation_scale_factor  # Scale Y coordinate (value)
+                    keyframe.co[1] *= scale_factor  # Scale Y coordinate (value)
                     print(f"Scaled Keyframe Value: {keyframe.co[1]}")  # Debugging statement
                 fcurve.update()
 
@@ -147,6 +147,43 @@ def export_action(obj, action, export_path):
         # Restore original action and NLA state
         obj.animation_data.action = original_action
         obj.animation_data.use_nla = original_use_nla
+
+def process_root_motion(armature, root_bone_name, action):
+    """Convert root bone movement to armature object movement (Blender-only fix)"""
+    if not armature or not root_bone_name or not action:
+        return action
+    
+    # Create new action for modified animation
+    root_action = action.copy()
+    root_bone = armature.pose.bones.get(root_bone_name)
+    
+    # Get rest matrix in world space
+    armature_matrix = armature.matrix_world
+    rest_matrix = armature_matrix @ root_bone.bone.matrix_local
+    
+    # Blender to Unreal scale conversion
+    scale_factor = 1
+    
+    # Process all keyframes
+    for fcurve in root_action.fcurves:
+        if fcurve.data_path == f'pose.bones["{root_bone_name}"].location':
+            for keyframe in fcurve.keyframe_points:
+                # Get bone's world position at this frame
+                bone_matrix = armature_matrix @ root_bone.matrix
+                world_loc = bone_matrix.translation
+                
+                # Convert to armature object movement with scale fix
+                delta = (world_loc - rest_matrix.translation) * scale_factor
+                
+                # Apply to armature with axis conversion (Y-forward to X-forward)
+                armature.location.x = delta.y  # Blender Y → Unreal X
+                armature.location.y = delta.x  # Blender X → Unreal Y
+                armature.location.z = delta.z  # Z-up remains same
+                
+                # Zero out bone position
+                keyframe.co[1] = 0
+                
+    return root_action
 
 class ACTION_UL_list(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
@@ -233,6 +270,36 @@ class OBJECT_OT_batch_export_fbx(bpy.types.Operator):
     bl_idname = "export.batch_fbx"
     bl_label = "Batch Export FBX"
     bl_options = {'REGISTER', 'UNDO'}
+    
+    confirm_message: bpy.props.StringProperty()
+
+    def invoke(self, context, event):
+        export_path = bpy.path.abspath(context.scene.batch_export_path)
+        existing_files = []
+        
+        # Check character file
+        if context.scene.export_character:
+            char_file = os.path.join(export_path, f"{context.scene.character_name}_Character.fbx")
+            if os.path.exists(char_file):
+                existing_files.append(char_file)
+        
+        # Check animation files
+        if context.scene.export_animations:
+            for action in bpy.data.actions:
+                if getattr(action, "export", True):
+                    anim_file = os.path.join(export_path, f"{action.name}.fbx")
+                    if os.path.exists(anim_file):
+                        existing_files.append(anim_file)
+        
+        if existing_files:
+            self.confirm_message = f"Overwrite {len(existing_files)} existing files?"
+            return context.window_manager.invoke_props_dialog(self, width=400)
+        else:
+            return self.execute(context)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text=self.confirm_message, icon='ERROR')
 
     def execute(self, context):
         export_path = bpy.path.abspath(context.scene.batch_export_path)
@@ -284,7 +351,7 @@ class OBJECT_OT_batch_export_fbx(bpy.types.Operator):
                     if armature.animation_data and temp_action:
                         armature.animation_data.action = temp_action
                     
-                    self.report({'INFO'}, f"Exported character in rest pose: {fbx_file}")
+                    self.report({'INFO'}, f"Exported character in rest pose: {fbx_file} (overwritten)" if os.path.exists(fbx_file) else f"Exported character in rest pose: {fbx_file}")
 
             # Export animations
             if context.scene.export_animations:
@@ -355,6 +422,18 @@ class OBJECT_PT_batch_export_fbx_panel(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
         
+        # Check if scale is incorrect and show warning button if needed
+        is_correct_scale = abs(scene.unit_settings.scale_length - 0.01) < 0.001
+        if not is_correct_scale:
+            warning_box = layout.box()
+            row = warning_box.row()
+            row.alert = True
+            row.label(text="⚠ Incorrect Unit Scale!", icon='ERROR')
+            row = warning_box.row()
+            row.label(text=f"Current: {scene.unit_settings.scale_length}, Unreal requires: 0.01")
+            op = warning_box.operator("scene.set_unreal_scale", icon='MODIFIER')
+            layout.separator()
+        
         layout.prop(scene, "batch_export_path")
         
         # Armature selection (moved outside of character export)
@@ -396,9 +475,19 @@ class OBJECT_PT_batch_export_fbx_panel(bpy.types.Panel):
         box.prop(scene, "mesh_smooth_type")
         box.prop(scene, "use_mesh_edges")
         box.prop(scene, "use_tspace")
+        box.prop(scene, "use_armature_deform_only")
+        
+        # Root Motion Settings
+        box = layout.box()
+        box.label(text="Root Motion Settings:")
+        box.prop(scene, "enable_root_motion")
+        if scene.enable_root_motion:
+            box.prop_search(scene, "root_motion_bone", scene.character_armature.data, "bones", text="Root Bone")
+            box.prop(scene, "root_motion_up_axis")
+            box.prop(scene, "bake_root_z_rotation")
         
         row = layout.row()
-        row.operator("export.batch_fbx")
+        row.operator("export.batch_fbx", text="Export FBX Batch")
 
 def update_select_all(self, context):
     for action in bpy.data.actions:
@@ -439,6 +528,29 @@ class OBJECT_OT_character_object_remove(bpy.types.Operator):
         scene.character_object_index = min(max(0, scene.character_object_index - 1), len(scene.character_objects) - 1)
         return {'FINISHED'}
 
+class SCENE_OT_set_unreal_scale(bpy.types.Operator):
+    bl_idname = "scene.set_unreal_scale"
+    bl_label = "Fix Scale Now (May Affect Existing Rigs!)"
+    bl_description = "Set the unit scale to 0.01 for Unreal Engine compatibility"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        # Store current scale for warning message
+        old_scale = context.scene.unit_settings.scale_length
+        
+        # Set unit system and scale
+        context.scene.unit_settings.system = 'METRIC'
+        context.scene.unit_settings.scale_length = 0.01
+        
+        # Warning if scene already has content
+        if len([obj for obj in context.scene.objects if obj.type == 'ARMATURE']) > 0:
+            self.report({'WARNING'}, 
+                "Scale changed from {:.4f} to 0.01. This will affect existing rigs! Consider starting over with the correct scale.".format(old_scale))
+        else:
+            self.report({'INFO'}, "Unit scale set to 0.01 for Unreal Engine compatibility")
+        
+        return {'FINISHED'}
+
 def register():
     bpy.utils.register_class(ACTION_UL_list)
     bpy.utils.register_class(ANIM_OT_set_active_action)
@@ -451,6 +563,7 @@ def register():
     bpy.utils.register_class(OBJECT_OT_batch_export_fbx)
     bpy.utils.register_class(OBJECT_PT_batch_export_fbx_panel)
     bpy.utils.register_class(OBJECT_OT_apply_scale)
+    bpy.utils.register_class(SCENE_OT_set_unreal_scale)
     bpy.types.Scene.batch_export_path = StringProperty(
         name="Export Path",
         subtype='DIR_PATH',
@@ -493,6 +606,31 @@ def register():
         name="Character Armature",
         description="Select the armature for the character"
     )
+    bpy.types.Scene.use_armature_deform_only = BoolProperty(
+        name="Deform Bones Only",
+        description="Export only deformation bones (skip control bones)",
+        default=True
+    )
+    bpy.types.Scene.enable_root_motion = BoolProperty(
+        name="Extract Root Motion",
+        description="Bake root bone movement to armature object",
+        default=False
+    )
+    bpy.types.Scene.root_motion_bone = StringProperty(
+        name="Root Bone",
+        description="Bone to use for root motion extraction",
+        default=""
+    )
+    bpy.types.Scene.root_motion_up_axis = EnumProperty(
+        name="Up Axis",
+        items=[('Y', 'Y Up (Blender)', ''), ('Z', 'Z Up (Unreal)', '')],
+        default='Z'
+    )
+    bpy.types.Scene.bake_root_z_rotation = BoolProperty(
+        name="Bake Z Rotation",
+        description="Convert root bone rotation to forward movement",
+        default=True
+    )
 
 def unregister():
     bpy.utils.unregister_class(ACTION_UL_list)
@@ -506,6 +644,7 @@ def unregister():
     bpy.utils.unregister_class(OBJECT_OT_batch_export_fbx)
     bpy.utils.unregister_class(OBJECT_PT_batch_export_fbx_panel)
     bpy.utils.unregister_class(OBJECT_OT_apply_scale)
+    bpy.utils.unregister_class(SCENE_OT_set_unreal_scale)
     del bpy.types.Scene.batch_export_path
     del bpy.types.Scene.action_index
     del bpy.types.Action.export
@@ -522,6 +661,11 @@ def unregister():
     del bpy.types.Scene.character_object_index
     del bpy.types.Scene.export_animations
     del bpy.types.Scene.character_armature
+    del bpy.types.Scene.use_armature_deform_only
+    del bpy.types.Scene.enable_root_motion
+    del bpy.types.Scene.root_motion_bone
+    del bpy.types.Scene.root_motion_up_axis
+    del bpy.types.Scene.bake_root_z_rotation
 
 if __name__ == "__main__":
     register()
